@@ -2600,7 +2600,7 @@ class DeepSpeedEngine(Module):
                         f"Unable to find latest file at {latest_path}, if trying to load latest "
                         "checkpoint please ensure this file exists or pass an explicit checkpoint tag when loading a checkpoint."
                     )
-                    print("^^^^^", jit_checkpointing.jit_get_checkpoint_path(None, only_iter=True))
+
                     if (not os.environ.get("JIT_LOAD") or not jit_checkpointing.jit_get_checkpoint_path(None, only_iter=True)[0]):
                         return None, None
                     tag="jit_dummy"
@@ -2609,10 +2609,6 @@ class DeepSpeedEngine(Module):
             # Prepare for checkpoint load by ensuring all parameters are partitioned
             self.optimizer.checkpoint_event_prologue()
 
-        # if (os.environ.get("JIT_SAVE") and tag is None):
-        #     # tag="jit_dummy"
-        #     print("************** in jit loading")
-        #     os.environ.pop(variable_name)
         load_path, client_states = self._load_checkpoint(load_dir,
                                                          tag,
                                                          load_module_strict=load_module_strict,
@@ -3079,7 +3075,7 @@ class DeepSpeedEngine(Module):
         return success
 
     def _save_checkpoint(self, save_dir, tag, client_state={}):
-        print('x1')
+
         save_path = self._get_ckpt_name(save_dir, tag)
 
         zero_optimizer_state = self.zero_optimization() or self.bfloat16_enabled()
@@ -3093,7 +3089,7 @@ class DeepSpeedEngine(Module):
         self._curr_ckpt_path = os.path.join(save_dir, tag)
         module = self.module_state_dict()
         self._curr_ckpt_path = None
-        print("x2s")
+
         state = dict(module=module,
                      buffer_names=self._get_buffer_names(),
                      optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state else None,
@@ -3118,7 +3114,7 @@ class DeepSpeedEngine(Module):
         state.update(client_state)
 
         if (self.save_non_zero_checkpoint or os.environ.get("JIT_SAVE")):
-            print("saving all ranks")
+
             log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
 
             self.checkpoint_engine.save(state, save_path)
