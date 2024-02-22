@@ -11,6 +11,7 @@ import hashlib
 from collections import defaultdict, OrderedDict, deque
 from shutil import copyfile
 import gc
+import jit_checkpointing
 
 from torch.nn.modules import Module
 from torch.nn.parameter import Parameter
@@ -2543,6 +2544,8 @@ class DeepSpeedEngine(Module):
     def _get_all_ckpt_names(self, checkpoints_path, tag):
         # It is required that (checkpoints_path, tag) are consistent among all ranks.
         ckpt_file_pattern = self._get_ckpt_name(checkpoints_path, tag, mp_placeholder="*")
+        if (os.environ.get("JIT_LOAD")):
+            return [ckpt_file_pattern]
         import glob
 
         ckpt_files = glob.glob(ckpt_file_pattern)
@@ -2585,6 +2588,8 @@ class DeepSpeedEngine(Module):
             latest_tag = "latest_universal" if self.load_universal_checkpoint() else "latest"
             latest_path = os.path.join(load_dir, latest_tag)
             if os.path.isfile(latest_path):
+                if (os.environ.get("JIT_LOAD")):
+                    os.environ.pop("JIT_LOAD")
                 with open(latest_path, "r") as fd:
                     tag = fd.read().strip()
             else:
@@ -2595,12 +2600,19 @@ class DeepSpeedEngine(Module):
                         f"Unable to find latest file at {latest_path}, if trying to load latest "
                         "checkpoint please ensure this file exists or pass an explicit checkpoint tag when loading a checkpoint."
                     )
-                    return None, None
+                    print("^^^^^", jit_checkpointing.jit_get_checkpoint_path(None, only_iter=True))
+                    if (not os.environ.get("JIT_LOAD") or not jit_checkpointing.jit_get_checkpoint_path(None, only_iter=True)[0]):
+                        return None, None
+                    tag="jit_dummy"
 
         if self.zero_optimization_partition_weights():
             # Prepare for checkpoint load by ensuring all parameters are partitioned
             self.optimizer.checkpoint_event_prologue()
 
+        # if (os.environ.get("JIT_SAVE") and tag is None):
+        #     # tag="jit_dummy"
+        #     print("************** in jit loading")
+        #     os.environ.pop(variable_name)
         load_path, client_states = self._load_checkpoint(load_dir,
                                                          tag,
                                                          load_module_strict=load_module_strict,
@@ -2880,7 +2892,8 @@ class DeepSpeedEngine(Module):
 
         # Ensure save_dir directory exists
         self.checkpoint_engine.makedirs(save_dir, exist_ok=True)
-        dist.barrier()
+        if (not os.environ.get("JIT_SAVE")):
+            dist.barrier()
 
         if tag is None:
             tag = f"global_step{self.global_steps}"
@@ -2890,7 +2903,8 @@ class DeepSpeedEngine(Module):
         self.checkpoint_engine.create(tag)
 
         # Ensure checkpoint tag is consistent across ranks
-        self._checkpoint_tag_validation(tag)
+        if (not os.environ.get("JIT_SAVE")):
+            self._checkpoint_tag_validation(tag)
 
         if self.has_moe_layers:
             self.save_non_zero_checkpoint = False
@@ -2914,11 +2928,11 @@ class DeepSpeedEngine(Module):
 
         # Save latest checkpoint tag
         self.checkpoint_engine.commit(tag)
-        if save_latest and rank == 0:
+        if save_latest and (rank == 0 or os.environ.get("JIT_SAVE")):
             with open(os.path.join(save_dir, 'latest'), 'w') as fd:
                 fd.write(tag)
-
-        dist.barrier()
+        if (not os.environ.get("JIT_SAVE")):
+            dist.barrier()
 
         return True
 
@@ -3065,7 +3079,7 @@ class DeepSpeedEngine(Module):
         return success
 
     def _save_checkpoint(self, save_dir, tag, client_state={}):
-
+        print('x1')
         save_path = self._get_ckpt_name(save_dir, tag)
 
         zero_optimizer_state = self.zero_optimization() or self.bfloat16_enabled()
@@ -3079,7 +3093,7 @@ class DeepSpeedEngine(Module):
         self._curr_ckpt_path = os.path.join(save_dir, tag)
         module = self.module_state_dict()
         self._curr_ckpt_path = None
-
+        print("x2s")
         state = dict(module=module,
                      buffer_names=self._get_buffer_names(),
                      optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state else None,
@@ -3103,9 +3117,12 @@ class DeepSpeedEngine(Module):
                      ds_version=version)
         state.update(client_state)
 
-        if self.save_non_zero_checkpoint:
+        if (self.save_non_zero_checkpoint or os.environ.get("JIT_SAVE")):
+            print("saving all ranks")
             log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
+
             self.checkpoint_engine.save(state, save_path)
+            jit_checkpointing.jit_write_metadata(save_path, self.global_steps)
 
     def _get_buffer_names(self):
         buffer_names = []

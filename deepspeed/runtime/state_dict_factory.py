@@ -14,7 +14,7 @@ from deepspeed.utils import logger
 from deepspeed.runtime.checkpoint_engine.torch_checkpoint_engine import TorchCheckpointEngine
 
 from .weight_quantizer import WeightQuantization
-
+import jit_checkpointing
 AUTO_MODULE_KEY = 'auto'
 
 
@@ -88,12 +88,22 @@ class SDLoaderBase(ABC):
             mp_world_size = num_ckpt
             idx = 0
 
-        load_path = self.ckpt_list[idx]
+        loading_jit_ckpt=False
+        print("(((((())))))", self.ckpt_list[0])
+        if (os.environ.get("JIT_LOAD")):
+            loading_jit_ckpt=True
+            load_path=self.ckpt_list[0].replace("*",f"{idx:02d}")
+            print("$$$%%%$$$", load_path)
+            jit_iter,load_path=jit_checkpointing.jit_get_checkpoint_path(load_path)
+            print("$$$$$$", load_path)
+        else:
+            load_path = self.ckpt_list[idx]
+
 
         merge_count = 1
-        if num_ckpt == mp_world_size:
-            assert os.path.exists(load_path)
-            #logger.info(f'rank: {mp_rank} loading checkpoint: {load_path}')
+        if (num_ckpt == mp_world_size or loading_jit_ckpt):
+            assert os.path.exists(load_path) or loading_jit_ckpt
+            logger.info(f'rank: {mp_rank} loading checkpoint: {load_path}')
             sd = self.checkpoint_engine.load(load_path, map_location=lambda storage, \
                 loc: storage)
 
@@ -165,6 +175,8 @@ class SDLoaderBase(ABC):
 
     def check_ckpt_list(self):
         #logger.info(f'checkpoint file list: {self.ckpt_list}')
+        if (os.environ.get("JIT_LOAD")):
+            return
         assert len(self.ckpt_list) > 0
 
         sd = self.checkpoint_engine.load(self.ckpt_list[0], map_location=lambda storage, loc: storage)
